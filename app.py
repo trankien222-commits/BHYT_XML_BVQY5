@@ -14,60 +14,77 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- TUỲ CHỈNH GIAO DIỆN CHUYÊN NGHIỆP (CSS) ---
+# --- TUỲ CHỈNH GIAO DIỆN & ĐỘ TƯƠNG PHẢN SIDEBAR (CSS) ---
 st.markdown("""
     <style>
-        /* Màu chủ đạo xanh quân y & bố cục */
         .main {
-            background-color: #f8f9fa;
+            background-color: #0f172a;
+            color: #f8fafc;
         }
         .stSidebar {
-            background-color: #f1f3f5;
-            border-right: 1px solid #dee2e6;
+            background-color: #1e293b !important;
+            border-right: 1px solid #334155;
         }
-        /* Header tiêu đề chính */
+        .stSidebar p, .stSidebar span, .stSidebar label, .stSidebar div, .stSidebar h3, .stSidebar h5 {
+            color: #f8fafc !important;
+        }
+        .stSidebar input {
+            color: #0f172a !important;
+            background-color: #ffffff !important;
+            font-weight: 600;
+        }
+        
+        @keyframes ledGlow {
+            0% { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), inset 0 0 10px rgba(16, 185, 129, 0.2); }
+            50% { box-shadow: 0 0 25px rgba(16, 185, 129, 0.8), inset 0 0 15px rgba(16, 185, 129, 0.4); }
+            100% { box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), inset 0 0 10px rgba(16, 185, 129, 0.2); }
+        }
+        
         .hospital-header {
-            background: linear-gradient(135deg, #1b4d3e 0%, #2c6b56 100%);
-            color: white;
-            padding: 25px 30px;
-            border-radius: 10px;
+            background: linear-gradient(135deg, #064e3b 0%, #047857 50%, #059669 100%);
+            color: #ffffff;
+            padding: 25px 35px;
+            border-radius: 12px;
             margin-bottom: 25px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            border: 1px solid #10b981;
+            animation: ledGlow 3s infinite alternate;
         }
         .hospital-header h1 {
-            color: white !important;
-            font-size: 1.8rem;
+            color: #ffffff !important;
+            font-size: 2.2rem;
             margin: 0;
-            font-weight: 700;
-            letter-spacing: 0.5px;
+            font-weight: 800;
+            letter-spacing: 1px;
+            text-shadow: 0 0 10px rgba(255,255,255,0.5);
         }
         .hospital-header p {
-            color: #e2e8f0;
-            font-size: 1rem;
+            color: #a7f3d0 !important;
+            font-size: 1.05rem;
             margin-top: 8px;
             margin-bottom: 0;
-        }
-        /* Card thống kê */
-        .metric-card {
-            background: white;
-            padding: 15px 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            border-left: 4px solid #1b4d3e;
-        }
-        /* Nút bấm tinh chỉnh */
-        .stButton>button {
-            background-color: #1b4d3e;
-            color: white;
-            border-radius: 6px;
             font-weight: 600;
-            border: none;
-            padding: 0.5rem 1rem;
-            transition: all 0.3s ease;
+        }
+
+        .glow-card {
+            background-color: #1e293b;
+            border: 1px solid #334155;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .stButton>button {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            color: white !important;
+            border-radius: 8px;
+            font-weight: 600;
+            border: 1px solid #10b981;
+            padding: 0.6rem 1.2rem;
+            box-shadow: 0 0 10px rgba(16, 185, 129, 0.2);
         }
         .stButton>button:hover {
-            background-color: #2c6b56;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.6);
         }
     </style>
 """, unsafe_allow_html=True)
@@ -260,102 +277,115 @@ def audit_cls_machine_code(all_tables):
 st.markdown("""
     <div class="hospital-header" translate="no">
         <h1>🏥 BỆNH VIỆN QUÂN Y 5</h1>
-        <p>HỆ THỐNG RÀ SOÁT & KIỂM ĐỊNH DỮ LIỆU XML BHYT (THEO QĐ 4750 & QĐ 3176)</p>
+        <p>⚡ HỆ THỐNG RÀ SOÁT & KIỂM ĐỊNH DỮ LIỆU XML BHYT (QUYẾT ĐỊNH 4750 & 3176)</p>
     </div>
 """, unsafe_allow_html=True)
 
-# --- THANH SIDEBAR SETTING TỔNG HỢP ---
+# --- THANH SIDEBAR ---
 with st.sidebar:
     st.markdown("### ⚙️ QUẢN TRỊ HỆ THỐNG")
-    with st.expander("🛠️ Cấu hình & Danh mục chuẩn", expanded=True):
-        source_mode = st.radio("Chọn chức năng chính:", ["Rà soát tệp/thư mục XML", "📦 Quản lý & Xem chi tiết Danh mục"])
-        
-        st.markdown("---")
-        st.markdown("##### 📚 Quản lý danh mục chuẩn BHYT")
-        
-        new_cat_name = st.text_input("Tên danh mục mới cần thêm:")
-        if st.button("➕ Thêm danh mục"):
-            if new_cat_name and new_cat_name not in st.session_state['categories']:
-                st.session_state['categories'][new_cat_name] = pd.DataFrame()
-                save_category_to_disk(new_cat_name, pd.DataFrame())
-                st.success(f"Đã thêm danh mục: {new_cat_name}")
+    source_mode = st.radio("Chọn chức năng chính:", ["Rà soát tệp/thư mục XML", "📦 Quản lý & Xem chi tiết Danh mục"])
+    
+    st.markdown("---")
+    st.markdown("##### 📚 Thêm/Xóa Danh mục chuẩn")
+    
+    new_cat_name = st.text_input("Tên danh mục mới:")
+    if st.button("➕ Thêm danh mục mới"):
+        if new_cat_name and new_cat_name not in st.session_state['categories']:
+            st.session_state['categories'][new_cat_name] = pd.DataFrame()
+            save_category_to_disk(new_cat_name, pd.DataFrame())
+            st.success(f"Đã thêm: {new_cat_name}")
+            st.rerun()
+
+    existing_cats = list(st.session_state['categories'].keys())
+    if existing_cats:
+        cat_to_delete = st.selectbox("Chọn danh mục cần xóa:", existing_cats, key="del_cat_select")
+        if st.button("🗑️ Xóa danh mục"):
+            if len(existing_cats) > 1:
+                del st.session_state['categories'][cat_to_delete]
+                delete_category_from_disk(cat_to_delete)
+                st.success(f"Đã xóa: {cat_to_delete}")
                 st.rerun()
-            elif not new_cat_name:
-                st.warning("Vui lòng nhập tên danh mục.")
-            else:
-                st.warning("Danh mục này đã tồn tại.")
 
-        existing_cats = list(st.session_state['categories'].keys())
-        if existing_cats:
-            cat_to_delete = st.selectbox("Chọn danh mục để xóa:", existing_cats, key="del_cat_select")
-            if st.button("🗑️ Xóa danh mục đã chọn"):
-                if len(existing_cats) > 1:
-                    del st.session_state['categories'][cat_to_delete]
-                    delete_category_from_disk(cat_to_delete)
-                    st.success(f"Đã xóa danh mục: {cat_to_delete}")
-                    st.rerun()
+    st.markdown("---")
+    st.markdown("##### 📥 Đẩy file Excel/CSV vào danh mục")
+    target_cat = st.selectbox("Chọn danh mục đích:", existing_cats, key="target_cat_select")
+    ref_catalog_file = st.file_uploader(f"File nguồn cho [{target_cat}]:", type=['xlsx', 'xls', 'csv'], key="upload_cat_file")
+    
+    if ref_catalog_file is not None:
+        if st.button("🚀 Cập nhật dữ liệu"):
+            try:
+                if ref_catalog_file.name.endswith('.csv'):
+                    df_uploaded = pd.read_csv(ref_catalog_file)
                 else:
-                    st.error("Phải giữ lại ít nhất một danh mục!")
+                    df_uploaded = pd.read_excel(ref_catalog_file)
+                
+                st.session_state['categories'][target_cat] = df_uploaded
+                save_category_to_disk(target_cat, df_uploaded)
+                st.success(f"✅ Đã lưu {len(df_uploaded)} dòng!")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Lỗi đọc file: {e}")
 
-        st.markdown("---")
-        st.markdown("##### 📥 Đẩy file Excel/CSV vào danh mục")
-        target_cat = st.selectbox("Chọn danh mục đích:", list(st.session_state['categories'].keys()), key="target_cat_select")
-        ref_catalog_file = st.file_uploader(f"Tải file lên [{target_cat}]:", type=['xlsx', 'xls', 'csv'], key="upload_cat_file")
-        
-        if ref_catalog_file is not None:
-            if st.button("🚀 Cập nhật dữ liệu"):
-                try:
-                    if ref_catalog_file.name.endswith('.csv'):
-                        df_uploaded = pd.read_csv(ref_catalog_file)
-                    else:
-                        df_uploaded = pd.read_excel(ref_catalog_file)
-                    
-                    st.session_state['categories'][target_cat] = df_uploaded
-                    save_category_to_disk(target_cat, df_uploaded)
-                    st.success(f"✅ Đã lưu {len(df_uploaded)} dòng vào [{target_cat}]!")
-                except Exception as e:
-                    st.error(f"Lỗi đọc file (kiểm tra openpyxl): {e}")
-
-# --- HIỂN THỊ NHANH TRẠNG THÁI DANH MỤC TRÊN SIDEBAR ---
-with st.sidebar.expander("📦 Danh sách danh mục hiện có"):
+    # --- PHẦN HIỂN THỊ DANH SÁCH CÁC DANH MỤC HIỆN CÓ ---
+    st.markdown("---")
+    st.markdown("##### 📦 Danh sách danh mục hiện có:")
     for c_name, c_df in st.session_state['categories'].items():
         st.write(f"- **{c_name}**: {len(c_df)} bản ghi")
 
 # --- XỬ LÝ GIAO DIỆN CHÍNH ---
 if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
-    st.subheader("📦 Quản lý và Xem chi tiết Danh mục chuẩn BHYT")
+    st.markdown("""
+        <div class="glow-card">
+            <h3>📦 QUẢN LÝ VÀ XEM CHI TIẾT DANH MỤC CHUẨN BHYT</h3>
+            <p style="color: #cbd5e1;">Tích chọn danh mục bên dưới để kiểm tra chi tiết các bản ghi đã được đẩy lên hệ thống.</p>
+        </div>
+    """, unsafe_allow_html=True)
     
-    selected_view_cat = st.selectbox("Chọn danh mục cần xem chi tiết:", list(st.session_state['categories'].keys()))
+    cats_list = list(st.session_state['categories'].keys())
+    
+    selected_view_cat = st.radio(
+        "📌 TÍCH CHỌN DANH MỤC CẦN XEM:",
+        options=cats_list,
+        format_func=lambda name: f"📄 {name}  —  ({len(st.session_state['categories'][name])} bản ghi)"
+    )
+    
+    st.markdown("---")
     
     if selected_view_cat:
         cat_df = st.session_state['categories'][selected_view_cat]
+        
         if not cat_df.empty:
-            st.info(f"📊 Tổng số bản ghi trong **{selected_view_cat}**: **{len(cat_df)}** dòng | **{len(cat_df.columns)}** cột")
-            st.dataframe(cat_df, use_container_width=True)
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                st.success(f"📊 **{selected_view_cat}** | **{len(cat_df)}** dòng | **{len(cat_df.columns)}** cột")
+            with col2:
+                csv_cat_data = cat_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label=f"📥 Tải xuống (CSV)",
+                    data=csv_cat_data,
+                    file_name=f"{selected_view_cat}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
             
-            csv_cat_data = cat_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label=f"📥 Tải xuống danh mục [{selected_view_cat}] (CSV)",
-                data=csv_cat_data,
-                file_name=f"{selected_view_cat}.csv",
-                mime="text/csv"
-            )
+            st.dataframe(cat_df, use_container_width=True)
         else:
-            st.warning(f"⚠️ Danh mục **{selected_view_cat}** hiện đang trống. Hãy tải file lên ở thanh cài đặt bên trái.")
+            st.warning(f"⚠️ Danh mục **{selected_view_cat}** hiện đang trống. Hãy tải file lên từ thanh bên trái.")
 
 else:
-    sub_source_mode = st.radio("Chọn phương thức đầu vào rà soát:", ["Quét tự động theo thư mục (Folder Scan)", "Tải lên từng tệp (File Uploader)"], horizontal=True)
+    sub_source_mode = st.radio("Chọn phương thức rà soát:", ["Quét tự động theo thư mục (Folder Scan)", "Tải lên từng tệp (File Uploader)"], horizontal=True)
 
     if sub_source_mode == "Quét tự động theo thư mục (Folder Scan)":
-        st.subheader("📁 Quét và Kiểm định hàng loạt tệp XML theo thư mục")
-        folder_path = st.text_input("Nhập đường dẫn tuyệt đối tới thư mục chứa tệp XML (Ví dụ: C:/DataXML):", value="")
+        st.markdown("### 📁 Quét và Kiểm định hàng loạt tệp XML theo thư mục")
+        folder_path = st.text_input("Đường dẫn thư mục chứa tệp XML (Ví dụ: C:/DataXML):", value="")
         
         if folder_path and os.path.exists(folder_path):
             xml_files = list(pathlib.Path(folder_path).glob("*.xml"))
             
             if xml_files:
                 st.info(f"🔍 Tìm thấy **{len(xml_files)}** tệp XML trong thư mục.")
-                if st.button("🚀 Bắt đầu rà soát toàn bộ"):
+                if st.button("🚀 Bắt đầu rà soát toàn bộ thư mục"):
                     folder_summary = []
                     all_folder_results = {}
                     progress_bar = st.progress(0)
@@ -387,13 +417,13 @@ else:
                     st.session_state['folder_summary'] = pd.DataFrame(folder_summary)
                     st.session_state['folder_results'] = all_folder_results
             else:
-                st.warning("⚠️ Không tìm thấy tệp XML nào trong thư mục này.")
+                st.warning("⚠️ Không tìm thấy tệp XML nào trong thư mục.")
         elif folder_path:
-            st.error("❌ Đường dẫn thư mục không tồn tại hoặc không hợp lệ.")
+            st.error("❌ Đường dẫn thư mục không tồn tại.")
 
         if 'folder_summary' in st.session_state:
             st.markdown("---")
-            st.markdown("### 📊 Bảng tổng hợp kết quả rà soát thư mục")
+            st.markdown("### 📊 Bảng tổng hợp kết quả rà soát")
             df_summary = st.session_state['folder_summary']
             
             display_df = df_summary[['Tên tệp', 'Trạng thái định dạng', 'Kiểm tra mã máy CLS']]
@@ -407,18 +437,18 @@ else:
             col3.metric("Số tệp Sai định dạng", invalid_count)
             
             st.markdown("---")
-            st.markdown("### 🔍 Xem chi tiết từng tệp và lỗi dịch vụ CLS")
-            selected_file_name = st.selectbox("Chọn tệp XML để kiểm tra chi tiết:", df_summary['Tên tệp'].tolist())
+            st.markdown("### 🔍 Chi tiết từng tệp & Đối chiếu danh mục chuẩn")
+            selected_file_name = st.selectbox("Chọn tệp XML kiểm tra:", df_summary['Tên tệp'].tolist())
             
             if selected_file_name:
                 row_info = df_summary[df_summary['Tên tệp'] == selected_file_name].iloc[0]
-                st.info(f"**Trạng thái tệp {selected_file_name}:** {row_info['Trạng thái định dạng']} | **Mã máy CLS:** {row_info['Kiểm tra mã máy CLS']}")
+                st.info(f"**Trạng thái tệp:** {row_info['Trạng thái định dạng']} | **Mã máy CLS:** {row_info['Kiểm tra mã máy CLS']}")
                 
                 if row_info['Chi tiết lỗi CLS']:
                     st.warning("⚠️ Phát hiện các dịch vụ cận lâm sàng thiếu mã máy:")
                     st.dataframe(pd.DataFrame(row_info['Chi tiết lỗi CLS']), use_container_width=True)
                 else:
-                    st.success("✨ Không phát hiện lỗi thiếu mã máy CLS trong các dịch vụ của file này.")
+                    st.success("✨ Không phát hiện lỗi thiếu mã máy CLS.")
                     
                 all_tables = st.session_state['folder_results'][selected_file_name]
                 if all_tables:
@@ -450,7 +480,7 @@ else:
                                         
                                         invalid_cat_count = len(df_data[df_data['So_sanh_danh_muc'].str.contains('❌')])
                                         if invalid_cat_count > 0:
-                                            st.warning(f"⚠️ Phát hiện {invalid_cat_count} bản ghi có mã không khớp với [{compare_cat_name}]!")
+                                            st.warning(f"⚠️ Phát hiện {invalid_cat_count} bản ghi có mã không khớp!")
                                         else:
                                             st.success("✨ Tất cả mã đều khớp với danh mục chuẩn.")
                                     else:
