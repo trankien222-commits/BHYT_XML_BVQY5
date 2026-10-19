@@ -9,6 +9,14 @@ import os
 import pathlib
 import time
 import json
+from urllib.parse import quote_plus
+
+# Thư viện kết nối CSDL SQL Server
+try:
+    from sqlalchemy import create_engine
+    HAS_SQL_LIB = True
+except Exception:
+    HAS_SQL_LIB = False
 
 # Thư viện hỗ trợ mở cửa sổ chọn thư mục Windows Explorer
 try:
@@ -25,7 +33,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# --- TUỲ CHỈNH GIAO DIỆN & ĐỘ TƯƠNG PHẢN SIDEBAR (CSS) ---
+# --- TUỲ CHỈNH GIAO DIỆN & CSS ---
 st.markdown("""
     <style>
         .main {
@@ -39,7 +47,7 @@ st.markdown("""
         .stSidebar p, .stSidebar span, .stSidebar label, .stSidebar div, .stSidebar h3, .stSidebar h5 {
             color: #f8fafc !important;
         }
-        .stSidebar input {
+        .stSidebar input, .stSidebar textarea {
             color: #0f172a !important;
             background-color: #ffffff !important;
             font-weight: 600;
@@ -106,6 +114,57 @@ os.makedirs(CATEGORY_DIR, exist_ok=True)
 CONFIG_FILE = os.path.join(CATEGORY_DIR, "config_folder.txt")
 CONFIG_AUTO_SCAN_FILE = os.path.join(CATEGORY_DIR, "config_auto_scan.txt")
 CONFIG_MACHINE_SERVICES_FILE = os.path.join(CATEGORY_DIR, "config_machine_services.json")
+CONFIG_DB_CREDENTIALS_FILE = os.path.join(CATEGORY_DIR, "config_db_credentials.json")
+CONFIG_CUSTOM_COMPARES_FILE = os.path.join(CATEGORY_DIR, "config_custom_compares.json")
+
+DEFAULT_DB_CONFIG = {
+    "server": "192.168.0.98",
+    "database": "BVQY5",
+    "username": "sa",
+    "password": "123@"
+}
+
+def load_db_credentials():
+    if os.path.exists(CONFIG_DB_CREDENTIALS_FILE):
+        try:
+            with open(CONFIG_DB_CREDENTIALS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return DEFAULT_DB_CONFIG
+
+def save_db_credentials(config_dict):
+    try:
+        with open(CONFIG_DB_CREDENTIALS_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
+if 'db_config' not in st.session_state:
+    st.session_state['db_config'] = load_db_credentials()
+
+def fetch_catalog_from_his(query_string):
+    if not HAS_SQL_LIB:
+        return pd.DataFrame(), False, "Thiếu thư viện kết nối CSDL (pyodbc hoặc sqlalchemy chưa được cài đặt)."
+    
+    cfg = st.session_state['db_config']
+    server = cfg.get("server", "192.168.0.98")
+    database = cfg.get("database", "BVQY5")
+    username = cfg.get("username", "sa")
+    password = cfg.get("password", "123@")
+    
+    encoded_password = quote_plus(password)
+    drivers_to_try = ["ODBC Driver 17 for SQL Server", "ODBC Driver 18 for SQL Server", "SQL Server"]
+    
+    for drv in drivers_to_try:
+        try:
+            conn_str = f"mssql+pyodbc://{username}:{encoded_password}@{server}/{database}?driver={quote_plus(drv)}&TrustServerCertificate=yes"
+            engine = create_engine(conn_str)
+            df_his = pd.read_sql(query_string, con=engine)
+            return df_his, True, ""
+        except Exception:
+            continue
+    return pd.DataFrame(), False, "Không thể kết nối SQL Server."
 
 def load_saved_folder_path():
     if os.path.exists(CONFIG_FILE):
@@ -157,14 +216,41 @@ def save_machine_services_config_to_disk(config_dict):
     except Exception:
         pass
 
+def load_custom_compares_config():
+    if os.path.exists(CONFIG_CUSTOM_COMPARES_FILE):
+        try:
+            with open(CONFIG_CUSTOM_COMPARES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {
+        "Đối chiếu Tên Dịch vụ kỹ thuật": {
+            "src_cat": "Danh mục Trang thiết bị CLS_Cổng BHYT",
+            "target_cats": ["Danh mục máy CLS"],
+            "mappings": {}
+        }
+    }
+
+def save_custom_compares_config_to_disk(config_dict):
+    try:
+        with open(CONFIG_CUSTOM_COMPARES_FILE, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, ensure_ascii=False, indent=4)
+    except Exception:
+        pass
+
 def load_categories_from_disk():
     cats = {
+        "Danh mục DVKT_Cổng BHYT": pd.DataFrame(),
         "Danh mục Dịch vụ kỹ thuật (XML3)": pd.DataFrame(),
         "Danh mục Thuốc (XML2)": pd.DataFrame(),
-        "Danh mục Vật tư y tế": pd.DataFrame()
+        "Danh mục Vật tư y tế": pd.DataFrame(),
+        "Danh mục Trang thiết bị CLS_Cổng BHYT": pd.DataFrame(),
+        "Danh mục máy CLS": pd.DataFrame()
     }
     for file_path in pathlib.Path(CATEGORY_DIR).glob("*.*"):
-        if file_path.name in ["config_folder.txt", "config_auto_scan.txt", "config_machine_services.json"]:
+        if file_path.name in ["config_folder.txt", "config_auto_scan.txt", "config_machine_services.json", "config_db_credentials.json", "config_custom_compares.json"]:
+            continue
+        if file_path.name.startswith("result_"):
             continue
         cat_name = file_path.stem
         try:
@@ -176,6 +262,27 @@ def load_categories_from_disk():
             pass
     return cats
 
+# Tải các kết quả đối chiếu đã lưu bền vững trên ổ cứng khi khởi động
+def load_saved_compare_results():
+    results = {}
+    for file_path in pathlib.Path(CATEGORY_DIR).glob("result_*.csv"):
+        # Tên file dạng result_<mapping_key_encoded>.csv
+        try:
+            mapping_key = file_path.stem[7:].replace("___", "__").replace("_VS_", "__VS__")
+            df_res = pd.read_csv(file_path)
+            results[mapping_key] = df_res
+        except Exception:
+            pass
+    return results
+
+def save_compare_result_to_disk(mapping_key, df_res):
+    try:
+        safe_key = mapping_key.replace("__VS__", "_VS_").replace("__", "___")
+        file_path = os.path.join(CATEGORY_DIR, f"result_{safe_key}.csv")
+        df_res.to_csv(file_path, index=False, encoding='utf-8-sig')
+    except Exception:
+        pass
+
 if 'categories' not in st.session_state:
     st.session_state['categories'] = load_categories_from_disk()
 
@@ -184,6 +291,12 @@ if 'saved_folder_path' not in st.session_state:
 
 if 'machine_services_config' not in st.session_state:
     st.session_state['machine_services_config'] = load_machine_services_config()
+
+if 'custom_compares' not in st.session_state:
+    st.session_state['custom_compares'] = load_custom_compares_config()
+
+if 'multi_compare_results' not in st.session_state:
+    st.session_state['multi_compare_results'] = load_saved_compare_results()
 
 saved_auto, saved_interval = load_auto_scan_config()
 if 'enable_auto_scan' not in st.session_state:
@@ -328,41 +441,85 @@ def process_xml_package(uploaded_file_or_path):
         
     return sub_files_data, is_valid_format, error_message
 
+@st.cache_data(show_spinner=False)
+def get_optimized_bhyt_lookup(df_bhyt):
+    bhyt_lookup_by_code = {}
+    bhyt_lookup_by_name = {}
+    if df_bhyt.empty:
+        return bhyt_lookup_by_code, bhyt_lookup_by_name
+        
+    code_col = next((c for c in df_bhyt.columns if 'MA' in c.upper()), None)
+    name_col = next((c for c in df_bhyt.columns if 'TEN_DVKT_PHEDUYET' in c.upper() or 'TEN' in c.upper()), None)
+    machine_col = next((c for c in df_bhyt.columns if 'MAY' in c.upper()), None)
+    
+    for _, row in df_bhyt.iterrows():
+        c_code = str(row[code_col]).strip() if code_col and pd.notna(row[code_col]) else ""
+        c_name = str(row[name_col]).strip() if name_col and pd.notna(row[name_col]) else ""
+        c_mach = str(row[machine_col]).strip() if machine_col and pd.notna(row[machine_col]) else ""
+        
+        if c_code:
+            bhyt_lookup_by_code[c_code.lower()] = {"name": c_name, "machine": c_mach}
+        if c_name:
+            bhyt_lookup_by_name[c_name.lower()] = {"code": c_code, "machine": c_mach}
+            
+    return bhyt_lookup_by_code, bhyt_lookup_by_name
+
 def audit_cls_machine_code(all_tables):
-    has_cls_missing_machine = False
+    has_cls_error = False
     details = []
     
-    all_configured_services = []
+    target_cat = "Danh mục DVKT_Cổng BHYT"
+    df_bhyt_cat = st.session_state['categories'].get(target_cat, pd.DataFrame())
+    
+    bhyt_lookup_by_code, bhyt_lookup_by_name = get_optimized_bhyt_lookup(df_bhyt_cat)
+
     machine_config_dict = st.session_state.get('machine_services_config', {})
-    for cat_name, s_list in machine_config_dict.items():
-        for s in s_list:
-            if s not in all_configured_services:
-                all_configured_services.append(s)
-                
+    configured_services = machine_config_dict.get(target_cat, [])
+
     for t_name, t_data in all_tables.items():
         if any(keyword in t_name for keyword in ['XML3', 'DVKTV', 'CANLAMSANG', 'CLS']):
             if isinstance(t_data, list):
                 for idx, row in enumerate(t_data):
-                    ma_may = row.get('MA_MAY', row.get('ma_may', ''))
-                    ma_dich_vu = row.get('MA_DICH_VU', row.get('MA_VАТ_TU', row.get('MA_DVKT', '')))
-                    ten_dich_vu = row.get('TEN_DICH_VU', row.get('TEN_DVKT', row.get('TEN_VAT_TU', row.get('TEN_VАТ_TU', ''))))
+                    ma_may_xml = row.get('MA_MAY', row.get('ma_may', '')).strip()
+                    ma_dv_xml = row.get('MA_DICH_VU', row.get('MA_VАТ_TU', row.get('MA_DVKT', ''))).strip()
+                    ten_dv_xml = row.get('TEN_DICH_VU', row.get('TEN_DVKT', row.get('TEN_VAT_TU', row.get('TEN_VАТ_TU', '')))).strip()
                     
-                    if (not ma_dich_vu or ma_dich_vu.strip() == "") and (not ten_dich_vu or ten_dich_vu.strip() == ""):
+                    if not ma_dv_xml and not ten_dv_xml:
                         continue
                     
-                    if all_configured_services and ten_dich_vu not in all_configured_services:
+                    if configured_services and ten_dv_xml not in configured_services:
                         continue
                     
-                    if not ma_may or ma_may.strip() == "":
-                        has_cls_missing_machine = True
+                    match_info = bhyt_lookup_by_code.get(ma_dv_xml.lower()) or bhyt_lookup_by_name.get(ten_dv_xml.lower())
+                    
+                    error_msg = ""
+                    if not match_info:
+                        error_msg = "❌ Dịch vụ không tồn tại trên Cổng BHYT"
+                    else:
+                        standard_name = match_info.get("name", "")
+                        if standard_name and ten_dv_xml.lower() != standard_name.lower():
+                            error_msg = f"⚠️ Tên dịch vụ không khớp với Cổng BHYT ({standard_name})"
+                        
+                        standard_machine = match_info.get("machine", "")
+                        if not ma_may_xml:
+                            error_msg = "🚨 Thiếu mã máy (MA_MAY trống)"
+                        elif standard_machine and ma_may_xml.lower() != standard_machine.lower():
+                            error_msg = f"⚠️ Mã máy ({ma_may_xml}) không khớp với Cổng BHYT ({standard_machine})"
+
+                    if error_msg:
+                        has_cls_error = True
                         details.append({
                             "Bảng": t_name,
                             "Dòng số": idx + 1,
-                            "Mã dịch vụ/VTYT": ma_dich_vu,
-                            "Tên dịch vụ": ten_dich_vu,
-                            "Lỗi": "Thiếu mã máy (MA_MAY trống)"
+                            "Mã dịch vụ": ma_dv_xml,
+                            "Tên dịch vụ XML": ten_dv_xml,
+                            "Mã máy XML": ma_may_xml if ma_may_xml else "(Trống)",
+                            "Tên BHYT chuẩn": match_info["name"] if match_info else "(Không tìm thấy)",
+                            "Mã máy BHYT chuẩn": match_info["machine"] if match_info else "(Không có)",
+                            "Lỗi / Trạng thái": error_msg
                         })
-    return has_cls_missing_machine, details
+
+    return has_cls_error, details
 
 def select_folder_dialog():
     if HAS_TKINTER:
@@ -388,9 +545,9 @@ def run_folder_scan(folder_path):
         if is_valid:
             has_missing, cls_details = audit_cls_machine_code(file_results)
             if has_missing:
-                missing_machine_status = f"Có thiếu ({len(cls_details)} dịch vụ)"
+                missing_machine_status = f"Có lỗi ({len(cls_details)} dịch vụ)"
             else:
-                missing_machine_status = "Đầy đủ mã máy"
+                missing_machine_status = "Đầy đủ & Khớp chuẩn"
         else:
             missing_machine_status = "Không kiểm tra (Sai định dạng)"
         
@@ -413,10 +570,18 @@ st.markdown("""
 # --- THANH SIDEBAR ---
 with st.sidebar:
     st.markdown("### ⚙️ QUẢN TRỊ HỆ THỐNG")
-    source_mode = st.radio("Chọn chức năng chính:", ["Rà soát tệp/thư mục XML", "📦 Quản lý & Xem chi tiết Danh mục"])
+    source_mode = st.radio(
+        "Chọn chức năng chính:", 
+        [
+            "Rà soát tệp/thư mục XML", 
+            "📦 Quản lý & Xem chi tiết Danh mục",
+            "🔄 Đối chiếu Đa Danh mục & Ghim kết quả",
+            "🔌 Kết nối & Đồng bộ trực tiếp từ HIS"
+        ]
+    )
     
     st.markdown("---")
-    st.markdown("##### 📚 Thêm/Xóa Danh mục chuẩn")
+    st.markdown("##### 📚 Quản lý Danh mục chuẩn")
     
     new_cat_name = st.text_input("Tên danh mục mới:")
     if st.button("➕ Thêm danh mục mới"):
@@ -428,13 +593,33 @@ with st.sidebar:
 
     existing_cats = list(st.session_state['categories'].keys())
     if existing_cats:
-        cat_to_delete = st.selectbox("Chọn danh mục cần xóa:", existing_cats, key="del_cat_select")
-        if st.button("🗑️ Xóa danh mục"):
+        st.markdown("---")
+        cat_action_target = st.selectbox("Chọn danh mục thao tác:", existing_cats, key="cat_action_select")
+        
+        ren_col1, ren_col2 = st.columns([2, 1])
+        with ren_col1:
+            new_renamed_val = st.text_input("Tên mới:", value=cat_action_target, key="input_rename_cat", label_visibility="collapsed")
+        with ren_col2:
+            if st.button("✏️ Sửa tên"):
+                if new_renamed_val and new_renamed_val != cat_action_target:
+                    if new_renamed_val in st.session_state['categories']:
+                        st.error("Tên danh mục đã tồn tại!")
+                    else:
+                        df_old = st.session_state['categories'].pop(cat_action_target)
+                        st.session_state['categories'][new_renamed_val] = df_old
+                        delete_category_from_disk(cat_action_target)
+                        save_category_to_disk(new_renamed_val, df_old)
+                        st.success(f"Đã đổi tên thành: {new_renamed_val}")
+                        st.rerun()
+        
+        if st.button("🗑️ Xóa danh mục này"):
             if len(existing_cats) > 1:
-                del st.session_state['categories'][cat_to_delete]
-                delete_category_from_disk(cat_to_delete)
-                st.success(f"Đã xóa: {cat_to_delete}")
+                del st.session_state['categories'][cat_action_target]
+                delete_category_from_disk(cat_action_target)
+                st.success(f"Đã xóa: {cat_action_target}")
                 st.rerun()
+            else:
+                st.warning("Cần giữ lại ít nhất 1 danh mục trên hệ thống!")
 
     st.markdown("---")
     st.markdown("##### 📥 Đẩy file Excel/CSV vào danh mục")
@@ -462,18 +647,375 @@ with st.sidebar:
         st.write(f"- **{c_name}**: {len(c_df)} bản ghi")
 
 # --- XỬ LÝ GIAO DIỆN CHÍNH ---
-if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
+if source_mode == "🔌 Kết nối & Đồng bộ trực tiếp từ HIS":
+    st.markdown("""
+        <div class="glow-card">
+            <h3>🔌 KẾT NỐI VÀ ĐỒNG BỘ TRỰC TIẾP CƠ SỞ DỮ LIỆU HIS</h3>
+            <p style="color: #cbd5e1;">Cấu hình kết nối bảo mật đến Database SQL Server của Bệnh viện Quân y 5 để truy vấn và đồng bộ danh mục trực tiếp.</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    with st.expander("🛠️ Cấu hình thông số kết nối Database (Đã bảo mật)", expanded=False):
+        cfg = st.session_state['db_config']
+        db_server = st.text_input("Server IP / Tên máy chủ:", value=cfg.get("server", "192.168.0.98"))
+        db_name = st.text_input("Tên Database:", value=cfg.get("database", "BVQY5"))
+        db_user = st.text_input("Tài khoản (Username):", value=cfg.get("username", "sa"))
+        db_pass = st.text_input("Mật khẩu (Password):", type="password", value=cfg.get("password", "123@"))
+        
+        if st.button("💾 Lưu cấu hình kết nối"):
+            new_cfg = {
+                "server": db_server,
+                "database": db_name,
+                "username": db_user,
+                "password": db_pass
+            }
+            st.session_state['db_config'] = new_cfg
+            save_db_credentials(new_cfg)
+            st.success("✅ Đã lưu cấu hình kết nối bảo mật lên hệ thống!")
+
+    st.markdown("---")
+    st.markdown("#### 📋 Duyệt & Xem chi tiết dữ liệu trực tiếp từ các bảng SQL Server")
+    
+    col_fetch_tbl, col_search_tbl = st.columns([1, 2])
+    with col_fetch_tbl:
+        btn_get_tables = st.button("🔄 Lấy danh sách toàn bộ bảng từ SQL Server")
+    
+    if btn_get_tables or 'his_all_tables_list' in st.session_state:
+        if btn_get_tables:
+            with st.spinner("Đang tải danh sách bảng từ SQL Server..."):
+                query_tables = "SELECT TABLE_SCHEMA + '.' + TABLE_NAME AS FULL_TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_TYPE = 'BASE TABLE' ORDER BY TABLE_NAME"
+                df_tbls, success, err_msg = fetch_catalog_from_his(query_tables)
+                if success and not df_tbls.empty:
+                    st.session_state['his_all_tables_list'] = df_tbls['FULL_TABLE_NAME'].tolist()
+                    st.success(f"✅ Tìm thấy **{len(st.session_state['his_all_tables_list'])}** bảng trong cơ sở dữ liệu `BVQY5`!")
+                else:
+                    st.error(f"❌ Lỗi lấy danh sách bảng: {err_msg}")
+
+        if 'his_all_tables_list' in st.session_state and st.session_state['his_all_tables_list']:
+            all_tables_found = st.session_state['his_all_tables_list']
+            
+            search_table_keyword = st.text_input("🔍 Nhập từ khóa tìm kiếm tên bảng (ví dụ: thuoc, bhyt, kcb...):", value="")
+            
+            filtered_tables = [
+                tbl for tbl in all_tables_found 
+                if search_table_keyword.lower() in tbl.lower()
+            ] if search_table_keyword else all_tables_found
+            
+            st.caption(f"Hiển thị {len(filtered_tables)} / {len(all_tables_found)} bảng phù hợp.")
+
+            if filtered_tables:
+                selected_table_to_view = st.selectbox(
+                    "🎯 Chọn bảng muốn xem dữ liệu chi tiết:", 
+                    options=filtered_tables,
+                    key="select_his_table_to_view"
+                )
+                
+                col_v1, col_v2 = st.columns([1, 3])
+                with col_v1:
+                    btn_preview_table = st.button("👁️ Xem chi tiết bảng này", key="btn_view_his_table_now")
+                with col_v2:
+                    row_limit_view = st.number_input("Số bản ghi tối đa cần tải:", min_value=10, max_value=10000, value=100, step=50)
+
+                if btn_preview_table:
+                    with st.spinner(f"Đang tải {row_limit_view} bản ghi đầu tiên từ bảng [{selected_table_to_view}]..."):
+                        preview_sql = f"SELECT TOP {row_limit_view} * FROM {selected_table_to_view}"
+                        df_preview, preview_ok, preview_err = fetch_catalog_from_his(preview_sql)
+                        if preview_ok and not df_preview.empty:
+                            st.session_state['preview_his_table_name'] = selected_table_to_view
+                            st.session_state['preview_his_table_df'] = df_preview
+                            st.success(f"🎉 Đã tải thành công **{len(df_preview)}** dòng dữ liệu từ bảng `[{selected_table_to_view}]`!")
+                        else:
+                            st.error(f"❌ Không thể xem chi tiết bảng [{selected_table_to_view}]: {preview_err}")
+
+                if 'preview_his_table_df' in st.session_state:
+                    st.markdown(f"##### 📊 Dữ liệu chi tiết bảng: `{st.session_state.get('preview_his_table_name', '')}`")
+                    st.dataframe(st.session_state['preview_his_table_df'], use_container_width=True)
+                    
+                    cats_for_sync = list(st.session_state['categories'].keys())
+                    col_save_cat, col_save_btn = st.columns([2, 1])
+                    with col_save_cat:
+                        save_target_cat = st.selectbox("Chọn danh mục ứng dụng để lưu trữ bảng này:", options=cats_for_sync, key="save_preview_to_app_cat")
+                    with col_save_btn:
+                        st.write("")
+                        st.write("")
+                        if st.button("💾 Lưu vào Danh mục ứng dụng"):
+                            st.session_state['categories'][save_target_cat] = st.session_state['preview_his_table_df']
+                            save_category_to_disk(save_target_cat, st.session_state['preview_his_table_df'])
+                            st.success(f"✅ Đã lưu dữ liệu bảng vào [{save_target_cat}] thành công!")
+            else:
+                st.warning("⚠️ Không tìm thấy bảng nào phù hợp với từ khóa tìm kiếm của bạn.")
+
+    st.markdown("---")
+    st.markdown("#### ⚡ Hoặc Tự nhập truy vấn SQL tùy chỉnh")
+    
+    default_sql = "SELECT TOP 100 * FROM dbo.DANHMUCKCB"
+    his_query = st.text_area("Nhập câu lệnh SQL SELECT tùy chỉnh:", value=default_sql, height=100)
+    
+    if st.button("🚀 Thực thi câu lệnh SQL"):
+        if not his_query.strip():
+            st.warning("⚠️ Vui lòng nhập câu lệnh SQL truy vấn.")
+        else:
+            with st.spinner("Đang kết nối cơ sở dữ liệu SQL Server..."):
+                df_synced, success, err_msg = fetch_catalog_from_his(his_query)
+                if success and not df_synced.empty:
+                    st.success(f"🎉 TRUY VẤN THÀNH CÔNG: Trả về **{len(df_synced)}** bản ghi!")
+                    st.dataframe(df_synced, use_container_width=True)
+                elif success and df_synced.empty:
+                    st.warning("⚠️ Kết nối thành công nhưng câu lệnh không trả về bản ghi nào.")
+                else:
+                    st.error(f"❌ Lỗi kết nối CSDL HIS: {err_msg}")
+
+elif source_mode == "🔄 Đối chiếu Đa Danh mục & Ghim kết quả":
+    st.markdown("""
+        <div class="glow-card">
+            <h3>🔄 QUẢN LÝ MỤC NỘI DUNG ĐỐI CHIẾU & GHIM CỐ ĐỊNH KẾT QUẢ</h3>
+            <p style="color: #cbd5e1;">Quản lý và tùy chỉnh các mục nội dung đối chiếu độc lập. Chọn một mục bên dưới để cấu hình hoặc xem lại kết quả đã ghim.</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    custom_compares = st.session_state['custom_compares']
+    compare_item_names = list(custom_compares.keys())
+    
+    # --- KHU VỰC QUẢN LÝ GỌN GÀNG (2 CỘT CÂN ĐỐI) ---
+    col_add, col_manage = st.columns([1, 1])
+    
+    with col_add:
+        st.markdown("##### ➕ Thêm mục nội dung mới")
+        new_item_title = st.text_input("Tên mục đối chiếu mới:", placeholder="Ví dụ: Đối chiếu Mã máy CLS", label_visibility="collapsed", key="input_new_compare_item")
+        if st.button("➕ Tạo mục đối chiếu mới", use_container_width=True):
+            if new_item_title and new_item_title not in custom_compares:
+                cats_list_all = list(st.session_state['categories'].keys())
+                custom_compares[new_item_title] = {
+                    "src_cat": cats_list_all[0] if cats_list_all else "",
+                    "target_cats": [cats_list_all[1]] if len(cats_list_all) > 1 else [],
+                    "mappings": {}
+                }
+                save_custom_compares_config_to_disk(custom_compares)
+                st.success(f"✅ Đã tạo: {new_item_title}")
+                st.rerun()
+            elif new_item_title in custom_compares:
+                st.error("Tên mục này đã tồn tại!")
+
+    with col_manage:
+        st.markdown("##### 🎯 Chọn & Quản lý Mục đối chiếu")
+        if compare_item_names:
+            selected_item_title = st.selectbox(
+                "Chọn mục đối chiếu:",
+                options=compare_item_names,
+                label_visibility="collapsed",
+                key="selectbox_active_compare_item"
+            )
+        else:
+            selected_item_title = None
+            st.info("Chưa có mục nào.")
+
+    if selected_item_title and selected_item_title in custom_compares:
+        active_item = custom_compares[selected_item_title]
+        
+        st.markdown("---")
+        col_r1, col_r2, col_r3 = st.columns([3, 1, 1])
+        with col_r1:
+            renamed_title = st.text_input("Đổi tên mục hiện tại:", value=selected_item_title, label_visibility="collapsed", key=f"rename_input_{selected_item_title}")
+        with col_r2:
+            if st.button("✏️ Đổi tên", use_container_width=True, key=f"btn_rename_{selected_item_title}"):
+                if renamed_title and renamed_title != selected_item_title:
+                    if renamed_title in custom_compares:
+                        st.error("Tên đã tồn tại!")
+                    else:
+                        custom_compares[renamed_title] = custom_compares.pop(selected_item_title)
+                        save_custom_compares_config_to_disk(custom_compares)
+                        st.success("Đã đổi tên thành công!")
+                        st.rerun()
+        with col_r3:
+            if st.button("🗑️ Xóa mục", use_container_width=True, key=f"btn_del_{selected_item_title}"):
+                if len(custom_compares) > 1:
+                    del custom_compares[selected_item_title]
+                    save_custom_compares_config_to_disk(custom_compares)
+                    st.success("Đã xóa mục thành công!")
+                    st.rerun()
+                else:
+                    st.warning("Cần giữ lại ít nhất 1 mục đối chiếu!")
+
+        st.markdown("---")
+        cats_list = list(st.session_state['categories'].keys())
+        
+        if len(cats_list) < 2:
+            st.warning("⚠️ Bạn cần ít nhất 2 danh mục trên hệ thống để thực hiện đối chiếu.")
+        else:
+            col_cat_src, col_cat_targets = st.columns(2)
+            
+            default_src_idx = 0
+            if active_item.get("src_cat") in cats_list:
+                default_src_idx = cats_list.index(active_item["src_cat"])
+                
+            with col_cat_src:
+                src_cat_name = st.selectbox(
+                    "🏛️ Chọn Danh mục Nguồn Chuẩn:", 
+                    options=cats_list, 
+                    index=default_src_idx,
+                    key=f"sel_src_cat_{selected_item_title}"
+                )
+            
+            target_cat_options = [c for c in cats_list if c != src_cat_name]
+            saved_targets = [t for t in active_item.get("target_cats", []) if t in target_cat_options]
+            
+            with col_cat_targets:
+                selected_target_cats = st.multiselect(
+                    "💻 Chọn các Danh mục cần đối chiếu (Có thể chọn nhiều):",
+                    options=target_cat_options,
+                    default=saved_targets,
+                    key=f"sel_target_cats_{selected_item_title}"
+                )
+                
+            if src_cat_name != active_item.get("src_cat") or selected_target_cats != active_item.get("target_cats"):
+                active_item["src_cat"] = src_cat_name
+                active_item["target_cats"] = selected_target_cats
+                save_custom_compares_config_to_disk(custom_compares)
+            
+            df_src = st.session_state['categories'][src_cat_name]
+            
+            if df_src.empty:
+                st.error(f"❌ Danh mục nguồn [{src_cat_name}] hiện đang trống dữ liệu.")
+            elif not selected_target_cats:
+                st.warning("⚠️ Vui lòng chọn ít nhất một danh mục đối chiếu ở mục bên phải.")
+            else:
+                st.markdown("#### ⚙️ Cấu hình cột khóa và so sánh chi tiết")
+                src_cols = list(df_src.columns)
+                
+                for t_cat in selected_target_cats:
+                    df_target = st.session_state['categories'][t_cat]
+                    target_cols = list(df_target.columns)
+                    
+                    mapping_key = f"{selected_item_title}__{src_cat_name}__VS__{t_cat}"
+                    saved_mapping = active_item.get("mappings", {}).get(t_cat, {})
+                    
+                    with st.expander(f"📦 Cấu hình & Kết quả đối chiếu với: [{t_cat}]", expanded=True):
+                        col_m1, col_m2 = st.columns(2)
+                        
+                        default_src_match = saved_mapping.get('src_match_cols', [c for c in src_cols if 'MA' in c.upper() or 'CODE' in c.upper()][:1])
+                        default_target_match = saved_mapping.get('target_match_cols', [c for c in target_cols if 'MA' in c.upper() or 'CODE' in c.upper()][:1])
+                        
+                        with col_m1:
+                            sel_src_cols = st.multiselect(f"Cột mã định danh ở Nguồn [{src_cat_name}]:", options=src_cols, default=default_src_match, key=f"src_m_{mapping_key}")
+                        with col_m2:
+                            sel_target_cols = st.multiselect(f"Cột mã định danh tương ứng ở Đích [{t_cat}]:", options=target_cols, default=default_target_match, key=f"target_m_{mapping_key}")
+                            
+                        col_v1, col_v2 = st.columns(2)
+                        default_src_val = saved_mapping.get('src_val_cols', [c for c in src_cols if 'TEN' in c.upper() or 'GIA' in c.upper()][:1])
+                        default_target_val = saved_mapping.get('target_val_cols', [c for c in target_cols if 'TEN' in c.upper() or 'GIA' in c.upper()][:1])
+                        
+                        with col_v1:
+                            sel_src_vals = st.multiselect(f"Cột so sánh nội dung ở Nguồn:", options=src_cols, default=default_src_val, key=f"src_v_{mapping_key}")
+                        with col_v2:
+                            sel_target_vals = st.multiselect(f"Cột so sánh nội dung ở Đích:", options=target_cols, default=default_target_val, key=f"target_v_{mapping_key}")
+                        
+                        if st.button(f"🚀 Tiến hành Đối chiếu & Ghim kết quả cho [{t_cat}]", key=f"btn_run_{mapping_key}"):
+                            if len(sel_src_cols) != len(sel_target_cols) or len(sel_src_vals) != len(sel_target_vals):
+                                st.error("⚠️ Số lượng cột khóa định danh hoặc cột so sánh giữa hai danh mục phải bằng nhau.")
+                            elif not sel_src_cols:
+                                st.warning("⚠️ Vui lòng chọn ít nhất 1 cột khóa định danh.")
+                            else:
+                                if "mappings" not in active_item:
+                                    active_item["mappings"] = {}
+                                active_item["mappings"][t_cat] = {
+                                    "src_match_cols": sel_src_cols,
+                                    "target_match_cols": sel_target_cols,
+                                    "src_val_cols": sel_src_vals,
+                                    "target_val_cols": sel_target_vals
+                                }
+                                save_custom_compares_config_to_disk(custom_compares)
+                                
+                                with st.spinner(f"Đang đối chiếu dữ liệu với [{t_cat}]..."):
+                                    df_t_copy = df_target.copy()
+                                    df_s_copy = df_src.copy()
+                                    
+                                    df_t_copy['_TARGET_KEY'] = df_t_copy[sel_target_cols].apply(
+                                        lambda row: "_".join([str(val).strip() if pd.notna(val) else "" for val in row]), axis=1
+                                    )
+                                    target_dict = {row['_TARGET_KEY']: row for _, row in df_t_copy.iterrows()}
+                                    
+                                    compare_results = []
+                                    for idx, s_row in df_s_copy.iterrows():
+                                        s_key = "_".join([str(s_row[c]).strip() if pd.notna(s_row[c]) else "" for c in sel_src_cols])
+                                        
+                                        status = ""
+                                        detail_diff = []
+                                        if s_key not in target_dict:
+                                            status = f"❌ Không có trong [{t_cat}]"
+                                        else:
+                                            t_row = target_dict[s_key]
+                                            is_different = False
+                                            for c_s, c_t in zip(sel_src_vals, sel_target_vals):
+                                                v_s = str(s_row.get(c_s, '')).strip()
+                                                v_t = str(t_row.get(c_t, '')).strip()
+                                                if v_s.lower() != v_t.lower():
+                                                    is_different = True
+                                                    detail_diff.append(f"{c_s} ({v_s}) ≠ {c_t} ({v_t})")
+                                            
+                                            if is_different:
+                                                status = f"⚠️ Sai lệch nội dung: {'; '.join(detail_diff)}"
+                                            else:
+                                                status = "✅ Khớp hoàn toàn"
+                                                
+                                        row_res = {"STT": idx + 1, "Mã khóa": s_key, "Trạng thái đối chiếu": status}
+                                        for c in sel_src_cols + sel_src_vals:
+                                            row_res[f"Nguồn_{c}"] = s_row.get(c, '')
+                                        if s_key in target_dict:
+                                            t_row = target_dict[s_key]
+                                            for c in sel_target_cols + sel_target_vals:
+                                                row_res[f"Đích_{c}"] = t_row.get(c, '')
+                                        compare_results.append(row_res)
+                                        
+                                    df_compare_res = pd.DataFrame(compare_results)
+                                    st.session_state['multi_compare_results'][mapping_key] = df_compare_res
+                                    # Lưu kết quả xuống ổ cứng bền vững
+                                    save_compare_result_to_disk(mapping_key, df_compare_res)
+                                    st.success(f"🎉 Đã hoàn tất đối chiếu, ghim và lưu kết quả bền vững với [{t_cat}]!")
+
+                        if mapping_key in st.session_state['multi_compare_results']:
+                            df_res = st.session_state['multi_compare_results'][mapping_key]
+                            st.markdown(f"##### 📊 KẾT QUẢ ĐỐI CHIẾU ĐÃ GHIM: `{src_cat_name}` ⇄ `{t_cat}`")
+                            
+                            m_cnt = len(df_res[df_res['Trạng thái đối chiếu'].str.contains('✅')])
+                            d_cnt = len(df_res[df_res['Trạng thái đối chiếu'].str.contains('⚠️')])
+                            ms_cnt = len(df_res[df_res['Trạng thái đối chiếu'].str.contains('❌')])
+                            
+                            cs1, cs2, cs3, cs4 = st.columns(4)
+                            cs1.metric("Tổng bản ghi", len(df_res))
+                            cs2.metric("✅ Khớp hoàn toàn", m_cnt)
+                            cs3.metric("⚠️ Sai lệch", d_cnt)
+                            cs4.metric("❌ Chưa có", ms_cnt)
+                            
+                            flt = st.selectbox("Lọc kết quả:", options=["Tất cả", "Chỉ xem lỗi/sai lệch (⚠️ & ❌)", "✅ Khớp hoàn toàn", "⚠️ Sai lệch nội dung", "❌ Chưa có"], key=f"flt_{mapping_key}")
+                            df_disp = df_res.copy()
+                            if flt == "Chỉ xem lỗi/sai lệch (⚠️ & ❌)":
+                                df_disp = df_disp[~df_disp['Trạng thái đối chiếu'].str.contains('✅')]
+                            elif flt != "Tất cả":
+                                df_disp = df_disp[df_disp['Trạng thái đối chiếu'].str.contains(flt[:1])]
+                                
+                            st.dataframe(df_disp, use_container_width=True)
+                            
+                            csv_data = df_res.to_csv(index=False).encode('utf-8-sig')
+                            st.download_button(
+                                label=f"📥 Tải xuống báo cáo đối chiếu [{t_cat}] (CSV)",
+                                data=csv_data,
+                                file_name=f"Bao_cao_{selected_item_title}_{src_cat_name}_vs_{t_cat}.csv",
+                                mime="text/csv",
+                                key=f"dl_{mapping_key}"
+                            )
+
+elif source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
     st.markdown("""
         <div class="glow-card">
             <h3>📦 QUẢN LÝ VÀ XEM CHI TIẾT DANH MỤC CHUẨN BHYT</h3>
-            <p style="color: #cbd5e1;">Nhập từ khóa tìm kiếm và bấm nút Tích chọn/Bỏ chọn để cấu hình dịch vụ kiểm tra mã máy. Cấu hình được lưu tự động lên hệ thống.</p>
+            <p style="color: #cbd5e1;">Tích chọn danh mục <b>Danh mục DVKT_Cổng BHYT</b> để cấu hình các dịch vụ cần rà soát kiểm tra mã máy.</p>
         </div>
     """, unsafe_allow_html=True)
     
     cats_list = list(st.session_state['categories'].keys())
     
     selected_view_cat = st.radio(
-        "📌 TÍCH CHỌN DANH MỤC CẦN XEM:",
+        "📌 TÍCH CHỌN DANH MỤC CẦN XEM & CẤU HÌNH:",
         options=cats_list,
         format_func=lambda name: f"📄 {name}  —  ({len(st.session_state['categories'][name])} bản ghi)"
     )
@@ -499,7 +1041,7 @@ if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
             
             st.markdown(f"#### ⚙️ Cấu hình chọn dịch vụ kiểm tra Mã máy cho: [{selected_view_cat}]")
             
-            cat_name_cols = [c for c in cat_df.columns if 'TEN' in c.upper()]
+            cat_name_cols = [c for c in cat_df.columns if 'TEN_DVKT_PHEDUYET' in c.upper() or 'TEN' in c.upper()]
             if cat_name_cols:
                 col_for_names = cat_name_cols[0]
                 all_services = cat_df[col_for_names].dropna().astype(str).unique().tolist()
@@ -528,7 +1070,7 @@ if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
                         st.success("Đã chọn tất cả dịch vụ hiển thị!")
                         st.rerun()
                 with col_btn_none:
-                    if st.button("❌ Bỏ chọn tất cả danh mục", key=f"btn_clear_all_{selected_view_cat}"):
+                    if st.button("❌ Bỏ chọn tất cả", key=f"btn_clear_all_{selected_view_cat}"):
                         st.session_state['machine_services_config'][selected_view_cat] = []
                         for s in all_services:
                             st.session_state[f"chk_svc_{selected_view_cat}_{s}"] = False
@@ -553,7 +1095,7 @@ if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
                 
                 st.info(f"💾 Đã lưu cấu hình: **{len(updated_selection)}** dịch vụ được chọn kiểm tra mã máy trong danh mục này.")
             else:
-                st.warning("⚠️ Không tìm thấy cột tên dịch vụ (TEN...) trong danh mục này để tạo bộ lọc.")
+                st.warning("⚠️ Không tìm thấy cột tên dịch vụ trong danh mục này để tạo bộ lọc.")
 
             st.markdown("---")
             st.dataframe(cat_df, use_container_width=True)
@@ -561,7 +1103,7 @@ if source_mode == "📦 Quản lý & Xem chi tiết Danh mục":
             st.warning(f"⚠️ Danh mục **{selected_view_cat}** hiện đang trống. Hãy tải file lên từ thanh bên trái.")
 
 else:
-    sub_source_mode = st.radio("Chọn phương thức rà soát:", ["Quét tự động theo thư mục (Folder Scan)", "Tải lên từng tệp (File Uploader)"], horizontal=True)
+    sub_source_mode = st.radio("Chọn phương thức rà soát:", ["Quét tự động theo thư mục (Folder Scan)", "Chọn tệp trực tiếp từ máy tính (File Picker)"], horizontal=True)
 
     if sub_source_mode == "Quét tự động theo thư mục (Folder Scan)":
         st.markdown("#### ⏱️ Cấu hình tự động quét theo thời gian")
@@ -700,7 +1242,7 @@ else:
                         should_run_scan = True
 
                 if should_run_scan:
-                    with st.spinner("Đang tiến hành rà soát thư mục..."):
+                    with st.spinner("Đang tiến hành rà soát thư mục siêu tốc..."):
                         df_sum, res_dict, total_f = run_folder_scan(folder_path)
                         st.session_state['folder_summary'] = df_sum
                         st.session_state['folder_results'] = res_dict
@@ -715,20 +1257,43 @@ else:
             st.error("❌ Đường dẫn thư mục hiện tại không tồn tại trên hệ thống.")
 
     else:
-        uploaded_file = st.file_uploader("Tải lên tệp XML tổng hợp hoặc tệp XML thành phần", type=['xml'])
-        if uploaded_file:
-            file_results, is_valid, err_msg = process_xml_package(uploaded_file)
+        st.markdown("### 💻 Chọn tệp XML trực tiếp từ máy tính")
+        uploaded_files = st.file_uploader(
+            "Chọn một hoặc nhiều tệp XML hồ sơ BHYT từ máy tính:",
+            type=['xml'],
+            accept_multiple_files=True
+        )
+        
+        if uploaded_files:
+            folder_summary = []
+            all_folder_results = {}
             
-            single_summary = [{
-                "Tên tệp": uploaded_file.name,
-                "Trạng thái định dạng": "✅ Đúng định dạng (QĐ 4750/3176)" if is_valid else f"❌ Sai định dạng ({err_msg})",
-                "Kiểm tra mã máy CLS": "Không có" if not is_valid else ("Đầy đủ mã máy" if not audit_cls_machine_code(file_results)[0] else f"Có thiếu ({len(audit_cls_machine_code(file_results)[1])} dịch vụ)"),
-                "Chi tiết lỗi CLS": audit_cls_machine_code(file_results)[1] if is_valid else []
-            }]
-            st.session_state['folder_summary'] = pd.DataFrame(single_summary)
-            st.session_state['folder_results'] = {uploaded_file.name: file_results}
+            for uploaded_file in uploaded_files:
+                file_results, is_valid, err_msg = process_xml_package(uploaded_file)
+                all_folder_results[uploaded_file.name] = file_results
+                
+                missing_machine_status = "Không có"
+                cls_details = []
+                if is_valid:
+                    has_missing, cls_details = audit_cls_machine_code(file_results)
+                    if has_missing:
+                        missing_machine_status = f"Có lỗi ({len(cls_details)} dịch vụ)"
+                    else:
+                        missing_machine_status = "Đầy đủ & Khớp chuẩn"
+                else:
+                    missing_machine_status = "Không kiểm tra (Sai định dạng)"
+                
+                folder_summary.append({
+                    "Tên tệp": uploaded_file.name,
+                    "Trạng thái định dạng": "✅ Đúng định dạng (QĐ 4750/3176)" if is_valid else f"❌ Sai định dạng ({err_msg})",
+                    "Kiểm tra mã máy CLS": missing_machine_status,
+                    "Chi tiết lỗi CLS": cls_details
+                })
+            
+            st.session_state['folder_summary'] = pd.DataFrame(folder_summary)
+            st.session_state['folder_results'] = all_folder_results
 
-    # --- HIỂN THỊ ĐẦY ĐỦ BẢNG TỔNG HỢP VÀ CHI TIẾT ---
+    # --- HIỂN THỊ BẢNG TỔNG HỢP VÀ CHI TIẾT LỖI ---
     if 'folder_summary' in st.session_state:
         st.markdown("---")
         st.markdown("### 📊 Bảng tổng hợp kết quả rà soát")
@@ -739,20 +1304,19 @@ else:
         
         valid_count = len(df_summary[df_summary['Trạng thái định dạng'].str.contains('✅')])
         invalid_count = len(df_summary[df_summary['Trạng thái định dạng'].str.contains('❌')])
-        missing_machine_file_count = len(df_summary[df_summary['Kiểm tra mã máy CLS'].str.contains('Có thiếu')])
+        missing_machine_file_count = len(df_summary[df_summary['Kiểm tra mã máy CLS'].str.contains('Có lỗi')])
         
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Tổng số tệp quét", len(df_summary))
         col2.metric("Số tệp Đúng định dạng", valid_count)
         col3.metric("Số tệp Sai định dạng", invalid_count)
-        col4.metric("🚨 Tệp thiếu mã máy", missing_machine_file_count)
+        col4.metric("🚨 Tệp có lỗi Mã máy/Cổng BHYT", missing_machine_file_count)
         
-        # --- THỐNG KÊ TỆP THIẾU MÃ MÁY KÈM NÚT CON MẮT (👁️) ĐỂ XEM CHI TIẾT VÀ TRỎ VỊ TRÍ ---
         if missing_machine_file_count > 0:
             st.markdown("---")
-            st.markdown("#### 🚨 Danh sách các tệp thiếu mã máy (`MA_MAY`)")
+            st.markdown("#### 🚨 Danh sách các tệp có lỗi Mã máy / Sai lệch với Cổng BHYT")
             
-            df_missing_files = df_summary[df_summary['Kiểm tra mã máy CLS'].str.contains('Có thiếu')]
+            df_missing_files = df_summary[df_summary['Kiểm tra mã máy CLS'].str.contains('Có lỗi')]
             
             for idx, m_row in df_missing_files.iterrows():
                 f_name = m_row['Tên tệp']
@@ -760,9 +1324,8 @@ else:
                 
                 col_info, col_eye = st.columns([5, 1])
                 with col_info:
-                    st.write(f"📄 **{f_name}** — ⚠️ Có **{len(f_details)}** dịch vụ thiếu mã máy.")
+                    st.write(f"📄 **{f_name}** — ⚠️ Có **{len(f_details)}** dịch vụ cần xử lý.")
                 with col_eye:
-                    # Trạng thái ẩn/hiện chi tiết lưu trong session state
                     eye_key = f"show_detail_{f_name}"
                     if eye_key not in st.session_state:
                         st.session_state[eye_key] = False
@@ -772,10 +1335,9 @@ else:
                         st.session_state[eye_key] = not st.session_state[eye_key]
                         st.rerun()
                 
-                # Nếu nút con mắt được kích hoạt (True), hiển thị bảng chi tiết và nút định vị
                 if st.session_state.get(eye_key, False):
                     with st.container():
-                        st.info(f"Chi tiết các dịch vụ thiếu mã máy trong tệp **{f_name}**:")
+                        st.info(f"Chi tiết đối chiếu dịch vụ trong tệp **{f_name}** với **Danh mục DVKT_Cổng BHYT**:")
                         st.dataframe(pd.DataFrame(f_details), use_container_width=True)
                         
                         if st.button(f"🎯 Mở bảng XML và trỏ đánh dấu vị trí lỗi trong tệp [{f_name}]", key=f"jump_btn_{f_name}"):
@@ -800,10 +1362,10 @@ else:
             st.info(f"**Trạng thái tệp:** {row_info['Trạng thái định dạng']} | **Mã máy CLS:** {row_info['Kiểm tra mã máy CLS']}")
             
             if row_info['Chi tiết lỗi CLS']:
-                st.warning(f"⚠️ Phát hiện **{len(row_info['Chi tiết lỗi CLS'])}** dịch vụ cận lâm sàng bị **thiếu mã máy (`MA_MAY`)**!")
+                st.warning(f"⚠️ Phát hiện **{len(row_info['Chi tiết lỗi CLS'])}** dịch vụ cận lâm sàng có lỗi hoặc sai lệch thông tin mã máy!")
                 st.dataframe(pd.DataFrame(row_info['Chi tiết lỗi CLS']), use_container_width=True)
             else:
-                st.success("✨ Không phát hiện lỗi thiếu mã máy CLS.")
+                st.success("✨ Khớp hoàn toàn và đầy đủ mã máy theo Cổng BHYT.")
                 
             all_tables = st.session_state['folder_results'].get(selected_file_name, {})
             if all_tables:
@@ -835,7 +1397,7 @@ else:
                         if compare_cat_name != "-- Không đối chiếu --":
                             standard_catalog = st.session_state['categories'][compare_cat_name]
                             if not standard_catalog.empty:
-                                st.markdown(f"#### 🔄 Cấu hình chọn **nhiều trường** đối chiếu với [{compare_cat_name}]:")
+                                st.markdown(f"#### 🔄 Cấu hình chọn trường đối chiếu với [{compare_cat_name}]:")
                                 
                                 col_xml_field, col_cat_field = st.columns(2)
                                 
@@ -845,14 +1407,14 @@ else:
                                     default_xml_cols = [xml_cols[0]]
                                         
                                 cat_cols_list = list(standard_catalog.columns)
-                                default_cat_cols = [c for c in cat_cols_list if 'MA_' in c.upper()]
+                                default_cat_cols = [c for c in cat_cols_list if 'TEN_DVKT_PHEDUYET' in c.upper() or 'TEN' in c.upper()]
                                 if not default_cat_cols and cat_cols_list:
                                     default_cat_cols = [cat_cols_list[0]]
                                         
                                 with col_xml_field:
                                     match_cols = st.multiselect("Chọn các cột mã ở tệp XML:", xml_cols, default=default_xml_cols, key=f"xml_cols_{selected_file_name}_{selected_table}")
                                 with col_cat_field:
-                                    cat_cols = st.multiselect("Chọn các cột mã tương ứng trong danh mục chuẩn:", cat_cols_list, default=default_cat_cols, key=f"cat_cols_{compare_cat_name}_{selected_file_name}_{selected_table}")
+                                    cat_cols = st.multiselect("Chọn các cột tương ứng trong danh mục chuẩn:", cat_cols_list, default=default_cat_cols, key=f"cat_cols_{compare_cat_name}_{selected_file_name}_{selected_table}")
                                 
                                 if match_cols and cat_cols and len(match_cols) == len(cat_cols):
                                     def check_row_match(row):
@@ -875,71 +1437,19 @@ else:
                                         return "✅ Khớp danh mục"
 
                                     df_data['So_sanh_danh_muc'] = df_data.apply(check_row_match, axis=1)
-                                    
-                                    target_services_config = st.session_state['machine_services_config'].get(compare_cat_name, [])
-                                    
-                                    if target_services_config:
-                                        st.info(f"ℹ️ Đang áp dụng cấu hình chọn lọc kiểm tra mã máy từ danh mục **{compare_cat_name}** ({len(target_services_config)} dịch vụ được tích chọn).")
-                                    
-                                    missing_machine_filtered = []
-                                    for idx, row in df_data.iterrows():
-                                        ma_may = str(row.get('MA_MAY', row.get('ma_may', ''))).strip()
-                                        ma_dv = str(row.get('MA_DICH_VU', row.get('MA_DVKT', row.get('MA_VАТ_TU', '')))).strip()
-                                        ten_dv = str(row.get('TEN_DICH_VU', row.get('TEN_DVKT', row.get('TEN_VAT_TU', row.get('TEN_VАТ_TU', ''))))).strip()
-                                        
-                                        if not ma_dv and not ten_dv:
-                                            continue
-                                            
-                                        if target_services_config and ten_dv not in target_services_config:
-                                            continue
-                                            
-                                        if not ma_may or ma_may.lower() == 'nan':
-                                            missing_machine_filtered.append({
-                                                "Dòng số": idx + 1,
-                                                "Mã dịch vụ": ma_dv,
-                                                "Tên dịch vụ": ten_dv,
-                                                "Trạng thái": row['So_sanh_danh_muc'],
-                                                "Lỗi": "Thiếu mã máy (MA_MAY trống)"
-                                            })
-
-                                    if missing_machine_filtered:
-                                        st.warning(f"⚠️ Tìm thấy **{len(missing_machine_filtered)}** dịch vụ theo cấu hình danh mục bị thiếu mã máy (`MA_MAY`)!")
-                                        st.dataframe(pd.DataFrame(missing_machine_filtered), use_container_width=True)
-                                    else:
-                                        st.success("✨ Không phát hiện dịch vụ nào bị thiếu mã máy theo cấu hình của danh mục.")
 
                                     if target_rows_to_highlight:
-                                        st.error(f"🎯 **Hệ thống đang trỏ đánh dấu tô đỏ** tại các dòng số: **{target_rows_to_highlight}** bị thiếu mã máy.")
+                                        st.error(f"🎯 **Hệ thống đang trỏ đánh dấu tô đỏ** tại các dòng số: **{target_rows_to_highlight}** bị lỗi mã máy.")
 
                                     st.markdown("##### 📋 Bảng dữ liệu chi tiết sau đối chiếu (Được tô màu đánh dấu vị trí lỗi):")
                                     st.dataframe(df_data.style.apply(highlight_missing_machine, axis=1), use_container_width=True)
-                                    
-                                    df_invalid = df_data[df_data['So_sanh_danh_muc'].str.contains('❌')]
-                                    invalid_cat_count = len(df_invalid)
-                                    
-                                    if invalid_cat_count > 0:
-                                        st.warning(f"⚠️ Phát hiện {invalid_cat_count} bản ghi không khớp danh mục chuẩn.")
-                                        
-                                        csv_error_data = df_invalid.to_csv(index=False).encode('utf-8-sig')
-                                        st.download_button(
-                                            label="📥 Tải xuống danh sách bản ghi không khớp (CSV)",
-                                            data=csv_error_data,
-                                            file_name=f"Danh_sach_khong_khop_{selected_table}.csv",
-                                            mime="text/csv"
-                                        )
                                 else:
                                     st.warning("⚠️ Số lượng cột chọn ở XML và Danh mục chuẩn phải bằng nhau để đối chiếu tương ứng.")
-                                    if target_rows_to_highlight:
-                                        st.error(f"🎯 **Hệ thống đang trỏ đánh dấu tô đỏ** tại các dòng số: **{target_rows_to_highlight}** bị thiếu mã máy.")
                                     st.dataframe(df_data.style.apply(highlight_missing_machine, axis=1), use_container_width=True)
                             else:
                                 st.warning(f"Danh mục [{compare_cat_name}] hiện đang trống.")
-                                if target_rows_to_highlight:
-                                    st.error(f"🎯 **Hệ thống đang trỏ đánh dấu tô đỏ** tại các dòng số: **{target_rows_to_highlight}** bị thiếu mã máy.")
                                 st.dataframe(df_data.style.apply(highlight_missing_machine, axis=1), use_container_width=True)
                         else:
-                            if target_rows_to_highlight:
-                                st.error(f"🎯 **Hệ thống đang trỏ đánh dấu tô đỏ** tại các dòng số: **{target_rows_to_highlight}** bị thiếu mã máy.")
                             st.dataframe(df_data.style.apply(highlight_missing_machine, axis=1), use_container_width=True)
                             
                     elif isinstance(data, dict):
